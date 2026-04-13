@@ -246,6 +246,22 @@ full_maintenance() {
     check_reboot_needed
 }
 
+# ---------- Histórico ----------
+
+view_log() {
+    if [ ! -s "$LOG_FILE" ]; then
+        echo -e "${YELLOW}Nenhuma operação registrada ainda.${NC}"
+        return
+    fi
+    echo -e "\n${BOLD}${BLUE}📋 Histórico de operações:${NC} $LOG_FILE\n"
+    # Usa less se disponível, senão exibe direto
+    if command -v less >/dev/null 2>&1; then
+        less +G "$LOG_FILE"
+    else
+        cat "$LOG_FILE"
+    fi
+}
+
 # ---------- Menu ----------
 
 show_menu() {
@@ -270,6 +286,9 @@ ${BOLD}${BLUE}╔═════════════════════
 
  ${BOLD}[ Manutenção ]${NC}
  10) Manutenção completa (update + clean)
+
+ ${BOLD}[ Histórico ]${NC}
+ 11) Ver log de operações
 
   0) Sair
 ${BLUE}════════════════════════════════════${NC}"
@@ -311,6 +330,7 @@ main() {
             8)  check_services ;;
             9)  show_summary ;;
             10) full_maintenance ;;
+            11) view_log ;;
             0)  break ;;
             *)  echo -e "${RED}Opção inválida.${NC}" ;;
         esac

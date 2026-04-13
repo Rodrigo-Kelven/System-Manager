@@ -37,6 +37,10 @@ Este script é resultado da fusão e melhoria de dois scripts anteriores:
 - Busca de arquivos grandes (>500MB), sem cruzar filesystems (`-xdev`)
 - Listagem de serviços habilitados
 
+### Histórico
+- Visualização paginada do log `/var/log/system_manager.log` diretamente pelo menu
+- Usa `less` (posicionado no final) se disponível, ou `cat` como fallback
+
 ---
 
 ## Uso
@@ -73,6 +77,9 @@ sudo ./system_manager.sh --help    # Exibe as opções disponíveis
  [ Manutenção ]
  10) Manutenção completa (update + clean)
 
+ [ Histórico ]
+ 11) Ver log de operações
+
   0) Sair
 ```
 
@@ -96,6 +103,7 @@ sudo ./system_manager.sh --help    # Exibe as opções disponíveis
 - Limpeza adicional de logs rotativos antigos (`.gz`, `.old`)
 - Log salvo em `/var/log/system_manager.log` com permissão `600` (somente root)
 - Saída colorida no terminal para melhor legibilidade
+- Visualização do histórico de operações diretamente pelo menu (opção 11)
 
 ---
 
