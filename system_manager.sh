@@ -1,33 +1,55 @@
 #!/usr/bin/env bash
 
 # ============================================================
-# Linux System Manager - Atualização + Limpeza + Diagnóstico
-# Seguro, interativo, com dry-run, modo auto e logs
-# Compatível: Debian, Ubuntu, CentOS, Fedora
+# Linux System Manager v2.1
+# Atualização + Limpeza + Diagnóstico
+# Seguro, interativo, dry-run, modo auto, logs
+# Compatível: Debian, Ubuntu, CentOS, Fedora, RHEL, openSUSE
+# Módulo de segurança: security_audit.sh (carregado automaticamente)
 # ============================================================
 
 set -euo pipefail
 
+# ================================================================
+# CARREGAR MÓDULO DE AUDITORIA DE SEGURANÇA
+# ================================================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! source "${SCRIPT_DIR}/security_audit.sh" 2>/dev/null; then
+    echo -e "\033[0;31m[ERRO]\033[0m security_audit.sh não encontrado em ${SCRIPT_DIR}" >&2
+    exit 1
+fi
+
+# ================================================================
+# CONFIGURAÇÃO GLOBAL
+# ================================================================
+
 LOG_FILE="/var/log/system_manager.log"
+
 DRY_RUN=false
 AUTO_MODE=false
 PKG="unknown"
 
-# ---------- Cores ----------
+# ================================================================
+# CORES
+# ================================================================
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# ---------- Funções utilitárias ----------
+# ================================================================
+# UTILITÁRIOS GERAIS
+# ================================================================
 
 log() {
     local msg="$1"
     echo -e "$msg"
-    # Salva no log sem códigos de escape ANSI
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $(printf '%s' "$msg" | sed 's/\x1B\[[0-9;]*m//g')" >> "$LOG_FILE"
 }
 
@@ -57,6 +79,10 @@ check_root() {
     fi
 }
 
+# ================================================================
+# DETECÇÃO DE GERENCIADOR DE PACOTES
+# ================================================================
+
 detect_package_manager() {
     if command -v apt >/dev/null 2>&1; then
         PKG="apt"
@@ -64,12 +90,16 @@ detect_package_manager() {
         PKG="dnf"
     elif command -v yum >/dev/null 2>&1; then
         PKG="yum"
+    elif command -v zypper >/dev/null 2>&1; then
+        PKG="zypper"
     else
-        log "${YELLOW}[AVISO]${NC} Gerenciador de pacotes não detectado. Funções de pacote desabilitadas."
+        log "${YELLOW}[AVISO]${NC} Gerenciador de pacotes não detectado."
     fi
 }
 
-# ---------- Diagnóstico ----------
+# ================================================================
+# DIAGNÓSTICO DO SISTEMA
+# ================================================================
 
 show_disk_usage() {
     log "\n${BOLD}${BLUE}📊 Uso de disco:${NC}"
@@ -112,35 +142,40 @@ check_reboot_needed() {
     fi
 }
 
-# ---------- Atualização ----------
+# ================================================================
+# ATUALIZAÇÃO
+# ================================================================
 
 update_repos() {
     log "\n${CYAN}🔄 Atualizando repositórios...${NC}"
     case "$PKG" in
-        apt) run_cmd "apt update -y" ;;
-        dnf) run_cmd "dnf check-update || true" ;;
-        yum) run_cmd "yum check-update || true" ;;
-        *) log "${YELLOW}[SKIP]${NC} Gerenciador desconhecido." ;;
+        apt)    run_cmd "apt update -y" ;;
+        dnf)    run_cmd "dnf check-update || true" ;;
+        yum)    run_cmd "yum check-update || true" ;;
+        zypper) run_cmd "zypper refresh" ;;
+        *)      log "${YELLOW}[SKIP]${NC} Gerenciador desconhecido." ;;
     esac
 }
 
 upgrade_packages() {
     log "\n${CYAN}⬆️  Atualizando pacotes instalados...${NC}"
     case "$PKG" in
-        apt) run_cmd "apt upgrade -y" ;;
-        dnf) run_cmd "dnf upgrade -y" ;;
-        yum) run_cmd "yum update -y" ;;
-        *) log "${YELLOW}[SKIP]${NC} Gerenciador desconhecido." ;;
+        apt)    run_cmd "apt upgrade -y" ;;
+        dnf)    run_cmd "dnf upgrade -y" ;;
+        yum)    run_cmd "yum update -y" ;;
+        zypper) run_cmd "zypper update -y" ;;
+        *)      log "${YELLOW}[SKIP]${NC} Gerenciador desconhecido." ;;
     esac
 }
 
 full_upgrade() {
     log "\n${CYAN}⬆️  Realizando upgrade completo do sistema...${NC}"
     case "$PKG" in
-        apt) run_cmd "apt full-upgrade -y" ;;
-        dnf) run_cmd "dnf distro-sync -y" ;;
-        yum) run_cmd "yum update -y" ;;
-        *) log "${YELLOW}[SKIP]${NC} Gerenciador desconhecido." ;;
+        apt)    run_cmd "apt full-upgrade -y" ;;
+        dnf)    run_cmd "dnf distro-sync -y" ;;
+        yum)    run_cmd "yum update -y" ;;
+        zypper) run_cmd "zypper dist-upgrade -y" ;;
+        *)      log "${YELLOW}[SKIP]${NC} Gerenciador desconhecido." ;;
     esac
 }
 
@@ -157,7 +192,9 @@ update_system() {
     check_reboot_needed
 }
 
-# ---------- Limpeza ----------
+# ================================================================
+# LIMPEZA
+# ================================================================
 
 clean_tmp() {
     log "\n${CYAN}🧹 Limpando /tmp (arquivos não acessados há +2 dias)...${NC}"
@@ -170,7 +207,7 @@ clean_user_cache() {
 }
 
 clean_package_cache() {
-    log "\n${CYAN}📦 Limpando cache e pacotes orphãos...${NC}"
+    log "\n${CYAN}📦 Limpando cache e pacotes orfãos...${NC}"
     case "$PKG" in
         apt)
             run_cmd "apt autoremove -y"
@@ -183,6 +220,9 @@ clean_package_cache() {
         yum)
             run_cmd "yum clean all"
             ;;
+        zypper)
+            run_cmd "zypper clean --all"
+            ;;
         *) log "${YELLOW}[SKIP]${NC} Gerenciador desconhecido." ;;
     esac
 }
@@ -190,7 +230,6 @@ clean_package_cache() {
 clean_logs() {
     log "\n${CYAN}📜 Limpando logs do journal (>7 dias)...${NC}"
     run_cmd "journalctl --vacuum-time=7d"
-    # Remove logs rotativos antigos se existirem
     run_cmd "find /var/log -type f -name '*.gz' -mtime +30 -delete 2>/dev/null || true"
     run_cmd "find /var/log -type f -name '*.old' -mtime +30 -delete 2>/dev/null || true"
 }
@@ -221,14 +260,15 @@ full_clean() {
     log "\n${GREEN}✅ Limpeza concluída! Espaço livre: ${disk_before} → ${disk_after}${NC}"
 }
 
-# ---------- Manutenção completa ----------
+# ================================================================
+# MANUTENÇÃO COMPLETA
+# ================================================================
 
 full_maintenance() {
     confirm "Executar manutenção completa (atualização + limpeza)?" || return 0
     log "\n${BOLD}${BLUE}🚀 Iniciando manutenção completa...${NC}"
     local disk_before
     disk_before=$(df -h / | awk 'NR==2{print $4}')
-
     update_repos
     upgrade_packages
     full_upgrade
@@ -238,7 +278,6 @@ full_maintenance() {
     clean_logs
     clean_trash
     clean_thumbnails
-
     local disk_after
     disk_after=$(df -h / | awk 'NR==2{print $4}')
     log "\n${GREEN}${BOLD}✅ Manutenção completa concluída!${NC}"
@@ -246,7 +285,9 @@ full_maintenance() {
     check_reboot_needed
 }
 
-# ---------- Histórico ----------
+# ================================================================
+# HISTÓRICO
+# ================================================================
 
 view_log() {
     if [ ! -s "$LOG_FILE" ]; then
@@ -254,7 +295,6 @@ view_log() {
         return
     fi
     echo -e "\n${BOLD}${BLUE}📋 Histórico de operações:${NC} $LOG_FILE\n"
-    # Usa less se disponível, senão exibe direto
     if command -v less >/dev/null 2>&1; then
         less +G "$LOG_FILE"
     else
@@ -262,12 +302,52 @@ view_log() {
     fi
 }
 
-# ---------- Menu ----------
+run_security_audit() {
+    sa_run_audit "${1:-false}" "${2:-false}"
+}
+
+# ================================================================
+# MENUS
+# ================================================================
+
+show_security_menu() {
+    echo -e "
+${BOLD}${MAGENTA}╔══════════════════════════════════════╗
+║   🔐 Auditoria de Segurança v2.0     ║
+╚══════════════════════════════════════╝${NC}
+ ${BOLD}[ Modos de Auditoria ]${NC}
+  1) Auditoria completa (somente relatório)
+  2) Auditoria + aplicar correções de segurança
+  3) Auditoria em modo DRY-RUN (simulação)
+
+ ${BOLD}[ Relatórios ]${NC}
+  4) Ver último relatório gerado
+  5) Listar todos os relatórios salvos
+
+  0) Voltar ao menu principal
+${MAGENTA}══════════════════════════════════════${NC}"
+}
+
+handle_security_menu() {
+    while true; do
+        show_security_menu
+        read -rp "$(echo -e "${BOLD}Escolha:${NC} ")" sec_opt
+        case $sec_opt in
+            1) sa_run_audit false false ;;
+            2) confirm "Aplicar correções de segurança?" && sa_run_audit false true || true ;;
+            3) sa_run_audit true  false ;;
+            4) sa_view_last_report ;;
+            5) sa_list_reports ;;
+            0) break ;;
+            *) echo -e "${RED}Opção inválida.${NC}" ;;
+        esac
+    done
+}
 
 show_menu() {
     echo -e "
 ${BOLD}${BLUE}╔══════════════════════════════════╗
-║     Linux System Manager v2.0    ║
+║     Linux System Manager v2.1    ║
 ╚══════════════════════════════════╝${NC}
  ${BOLD}[ Atualização ]${NC}
   1) Atualizar sistema completo
@@ -290,22 +370,27 @@ ${BOLD}${BLUE}╔═════════════════════
  ${BOLD}[ Histórico ]${NC}
  11) Ver log de operações
 
+ ${BOLD}${MAGENTA}[ 🔐 Segurança ]${NC}
+ 12) Auditoria de segurança de pacotes
+ 13) Auditoria rápida (DRY-RUN)
+
   0) Sair
 ${BLUE}════════════════════════════════════${NC}"
 }
 
-# ---------- Main ----------
+# ================================================================
+# MAIN
+# ================================================================
 
 main() {
     check_root
     detect_package_manager
 
-    # Garante que o arquivo de log existe e tem permissões corretas
     touch "$LOG_FILE"
     chmod 600 "$LOG_FILE"
 
     log "===== INÍCIO: $(date '+%Y-%m-%d %H:%M:%S') ====="
-    [ "$DRY_RUN" = true ] && log "${YELLOW}[MODO DRY-RUN ATIVADO - nenhuma alteração será feita]${NC}"
+    [ "$DRY_RUN" = true ] && log "${YELLOW}[MODO DRY-RUN ATIVADO]${NC}"
     show_summary
 
     if [ "$AUTO_MODE" = true ]; then
@@ -318,7 +403,6 @@ main() {
     while true; do
         show_menu
         read -rp "$(echo -e "${BOLD}Escolha:${NC} ")" opt
-
         case $opt in
             1)  update_system ;;
             2)  full_clean ;;
@@ -331,6 +415,8 @@ main() {
             9)  show_summary ;;
             10) full_maintenance ;;
             11) view_log ;;
+            12) handle_security_menu ;;
+            13) run_security_audit true false ;;
             0)  break ;;
             *)  echo -e "${RED}Opção inválida.${NC}" ;;
         esac
@@ -340,26 +426,49 @@ main() {
     log "===== FIM: $(date '+%Y-%m-%d %H:%M:%S') ====="
 }
 
-# ---------- Ajuda ----------
+# ================================================================
+# AJUDA
+# ================================================================
 
 usage() {
-    echo "Uso: $0 [--dry-run] [--auto]"
+    echo "Uso: $0 [--dry-run] [--auto] [--security-audit] [--security-fix]"
     echo ""
-    echo "  --dry-run   Simula as operações sem executar nada"
-    echo "  --auto      Executa manutenção completa sem interação"
+    echo "  --dry-run         Simula as operações sem executar nada"
+    echo "  --auto            Manutenção completa sem interação (cron-friendly)"
+    echo "  --security-audit  Auditoria de segurança + relatório .md"
+    echo "  --security-fix    Auditoria + aplica correções automaticamente"
     echo ""
     echo "Sem argumentos: abre o menu interativo"
     exit 0
 }
 
-# ---------- Argumentos ----------
+# ================================================================
+# ARGUMENTOS CLI
+# ================================================================
+
+SECURITY_AUDIT_MODE=false
+SECURITY_FIX_MODE=false
 
 for arg in "$@"; do
     case $arg in
-        --dry-run) DRY_RUN=true ;;
-        --auto)    AUTO_MODE=true ;;
-        --help|-h) usage ;;
+        --dry-run)         DRY_RUN=true ;;
+        --auto)            AUTO_MODE=true ;;
+        --security-audit)  SECURITY_AUDIT_MODE=true ;;
+        --security-fix)    SECURITY_FIX_MODE=true ;;
+        --help|-h)         usage ;;
     esac
 done
+
+if [ "$SECURITY_AUDIT_MODE" = true ] || [ "$SECURITY_FIX_MODE" = true ]; then
+    check_root
+    detect_package_manager
+    touch "$LOG_FILE" && chmod 600 "$LOG_FILE"
+    if [ "$SECURITY_FIX_MODE" = true ]; then
+        run_security_audit false true
+    else
+        run_security_audit "$DRY_RUN" false
+    fi
+    exit 0
+fi
 
 main
