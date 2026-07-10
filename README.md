@@ -49,6 +49,17 @@ sudo ./system_manager.sh --security-fix
 sudo ./security_audit.sh
 sudo ./security_audit.sh --dry-run
 sudo ./security_audit.sh --apply-fixes
+
+# Limpeza avançada: snap disabled + kernels antigos + configs residuais
+sudo ./system_manager.sh --advanced-clean
+
+# Ou individualmente
+sudo ./system_manager.sh --clean-snap       # só revisões snap disabled
+sudo ./system_manager.sh --clean-kernels    # só kernels antigos (apt)
+sudo ./system_manager.sh --clean-rc         # só pacotes com config residual (apt)
+
+# Combinado com --dry-run, apenas simula (nada é removido)
+sudo ./system_manager.sh --advanced-clean --dry-run
 ```
 
 ---
@@ -83,6 +94,12 @@ sudo ./security_audit.sh --apply-fixes
  [ 🔐 Segurança ]
  12) Auditoria de segurança de pacotes
  13) Auditoria rápida (DRY-RUN)
+
+ [ 🧹 Limpeza Avançada ]
+ 14) Remover revisões snap desabilitadas
+ 15) Remover kernels antigos (apt)
+ 16) Remover pacotes com config residual (apt)
+ 17) Executar as 3 limpezas avançadas
 
   0) Sair
 ```
@@ -170,6 +187,26 @@ Gerado em `/var/log/security_audit/security_report_YYYYMMDD_HHMMSS.md` com:
 - Tabela de pacotes desatualizados com análise de estabilidade e resultado da simulação
 - Tabela de correções aplicadas com método de seleção de versão
 - Checklist de hardening (SSH root login, autenticação por chave, firewall)
+
+---
+
+## Limpeza Avançada (Snap disabled / Kernels antigos / Configs residuais)
+
+Além da limpeza padrão, o menu **[ 🧹 Limpeza Avançada ]** automatiza três liberações de espaço que normalmente exigem comandos manuais:
+
+### 1. Revisões `disabled` do Snap
+Equivalente a rodar `snap list --all`, filtrar as linhas marcadas como `disabled` e remover cada uma com `snap remove <pacote> --revision=<N>`. O script lista as revisões encontradas, pede confirmação (pulada em `--dry-run`, `--auto` ou quando chamado via flag de CLI) e remove todas automaticamente.
+
+### 2. Kernels antigos (apt)
+Mantém apenas o **kernel em execução** (`uname -r`) e o **mais recente instalado**; todos os demais `linux-image-*` (e seus `linux-headers-*` correspondentes) são listados e purgados com `apt-get purge`, seguido de `autoremove`.
+
+### 3. Pacotes com configuração residual (`rc`)
+Pacotes que aparecem como `rc` em `dpkg -l` (removidos, mas com arquivos de configuração remanescentes) são detectados via `awk '/^rc/{print $2}'` e purgados com `apt-get purge`.
+
+Todas as três operações:
+- Respeitam `--dry-run` (apenas mostram o que seria removido)
+- Pedem confirmação interativa no menu, exceto em `--auto` ou quando disparadas por flag de CLI (já são um consentimento explícito, seguindo o mesmo padrão de `--security-fix`)
+- Registram cada pacote/revisão removido no `system_manager.log`
 
 ---
 
