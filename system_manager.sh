@@ -349,8 +349,18 @@ clean_apt_old_kernels() {
         confirm "Confirmar remoção dos kernels antigos acima?" || { log "${YELLOW}Cancelado pelo usuário.${NC}"; return 0; }
     fi
 
-    local pkg_args
-    pkg_args=$(echo "$full_list" | tr '\n' ' ')
+    # MELHORIA: cada nome de pacote é citado individualmente (printf %q)
+    # antes de compor o comando que o run_cmd executa via `bash -c`.
+    # Isso é defesa em profundidade: os nomes vêm do dpkg (confiáveis), mas
+    # concatenar texto não citado em um comando que será reinterpretado
+    # pelo shell é um antipadrão — qualquer futura fonte de dados (ex.: um
+    # nome de pacote de um repositório de terceiros mal formado) poderia
+    # injetar metacaracteres de shell.
+    local pkg_args=""
+    while read -r pkg; do
+        [ -z "$pkg" ] && continue
+        pkg_args+=" $(printf '%q' "$pkg")"
+    done <<< "$full_list"
 
     if [ "$DRY_RUN" = true ]; then
         log "${YELLOW}[DRY-RUN]${NC} apt-get purge -y ${pkg_args}"
@@ -386,8 +396,11 @@ clean_apt_residual_configs() {
         confirm "Confirmar purge dos pacotes acima?" || { log "${YELLOW}Cancelado pelo usuário.${NC}"; return 0; }
     fi
 
-    local pkg_args
-    pkg_args=$(echo "$rc_pkgs" | tr '\n' ' ')
+    # MELHORIA: mesma citação individual aplicada em clean_apt_old_kernels
+    local pkg_args=""
+    for pkg in $rc_pkgs; do
+        pkg_args+=" $(printf '%q' "$pkg")"
+    done
 
     if [ "$DRY_RUN" = true ]; then
         log "${YELLOW}[DRY-RUN]${NC} apt-get purge -y ${pkg_args}"

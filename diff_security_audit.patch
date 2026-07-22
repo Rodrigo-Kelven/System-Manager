@@ -1,0 +1,215 @@
+--- security_audit.sh	2026-07-22 11:55:37.266988180 +0000
++++ /home/claude/project/security_audit.sh	2026-07-22 11:55:08.770986486 +0000
+@@ -63,7 +63,12 @@
+         AUDIT) color="$_M"  ;; STEP)  color="$_B"  ;;
+     esac
+     echo -e "${color}[${level}]${_NC} $msg"
++    # MELHORIA: garante diretório 700 e log 600 mesmo em chamadas repetidas
++    # (o README já documentava essa permissão, mas nada no código a aplicava
++    # de fato a este arquivo antes da 1ª escrita)
+     mkdir -p "$SA_AUDIT_DIR"
++    chmod 700 "$SA_AUDIT_DIR" 2>/dev/null || true
++    [ -f "$SA_LOG_FILE" ] || { touch "$SA_LOG_FILE"; chmod 600 "$SA_LOG_FILE"; }
+     printf '%s [%s] %s\n' \
+         "$(date '+%Y-%m-%d %H:%M:%S')" "$level" \
+         "$(printf '%s' "$msg" | sed 's/\x1B\[[0-9;]*m//g')" \
+@@ -93,6 +98,26 @@
+ _sa_cleanup() { rm -rf "$SA_TMP_DIR"; }
+ trap _sa_cleanup EXIT
+ 
++# ------------------------------------------------------------------
++# MELHORIA: comparação exata de nome de pacote (não regex)
++# grep "^${pkg}\t" trata '.', '+', '*' etc. como metacaracteres — nomes
++# reais como "python3.11", "libssl1.1" ou "g++" podiam gerar falsos
++# positivos/negativos. awk com comparação de string ($1==p) é exato e
++# também evita o pipe extra grep|awk que existia em vários pontos.
++# ------------------------------------------------------------------
++_sa_installed_line() {
++    local pkg_name="$1"
++    awk -F'\t' -v p="$pkg_name" '$1==p{print; exit}' "${SA_TMP_DIR}/installed.txt" 2>/dev/null
++}
++
++_sa_installed_version() {
++    _sa_installed_line "$1" | awk -F'\t' '{print $2}'
++}
++
++_sa_is_installed() {
++    [ -n "$(_sa_installed_line "$1")" ]
++}
++
+ # ================================================================
+ # VERIFICAÇÃO DE DEPENDÊNCIAS
+ # ================================================================
+@@ -229,13 +254,11 @@
+         checked=$(( checked + 1 ))
+         _sa_progress "$checked" "$total" "Verificando EOL"
+ 
+-        # Verifica se o pacote está instalado
+-        if ! grep -q "^${pkg_name}\t" "${SA_TMP_DIR}/installed.txt" 2>/dev/null; then
+-            continue
+-        fi
++        # Verifica se o pacote está instalado (comparação exata, não regex)
++        _sa_is_installed "$pkg_name" || continue
+ 
+         local installed_version
+-        installed_version=$(grep "^${pkg_name}\t" "${SA_TMP_DIR}/installed.txt" | awk '{print $2}' | head -1)
++        installed_version=$(_sa_installed_version "$pkg_name")
+ 
+         # Busca dados de EOL para o produto
+         local eol_data
+@@ -316,11 +339,11 @@
+     for entry in "${static_list[@]}"; do
+         local pkg_name
+         pkg_name=$(echo "$entry" | cut -d'|' -f1)
+-        if grep -q "^${pkg_name}\t" "${SA_TMP_DIR}/installed.txt" 2>/dev/null; then
+-            # Não duplica se já entrou pelo endoflife.date
+-            if ! grep -q "^${pkg_name}|" "$outfile" 2>/dev/null; then
++        if _sa_is_installed "$pkg_name"; then
++            # Não duplica se já entrou pelo endoflife.date (comparação exata do 1º campo)
++            if ! awk -F'|' -v p="$pkg_name" '$1==p{found=1} END{exit !found}' "$outfile" 2>/dev/null; then
+                 local installed_version
+-                installed_version=$(grep "^${pkg_name}\t" "${SA_TMP_DIR}/installed.txt" | awk '{print $2}' | head -1)
++                installed_version=$(_sa_installed_version "$pkg_name")
+                 local friendly eol_date latest status
+                 friendly=$(echo "$entry"   | cut -d'|' -f2)
+                 eol_date=$(echo "$entry"   | cut -d'|' -f4)
+@@ -342,6 +365,20 @@
+     local outfile="${SA_TMP_DIR}/vulns.txt"
+     > "$outfile"
+ 
++    # MELHORIA: atualiza o índice de pacotes antes de analisar advisories
++    # nativos. `apt-get -s dist-upgrade` e `dnf/yum check-update` refletem
++    # apenas o cache local — sem isto, um servidor cujo cron de `apt update`
++    # falhou silenciosamente há dias reportaria "0 vulnerabilidades" mesmo
++    # com CVEs corrigidos há semanas no repositório. É somente leitura de
++    # metadados (não instala nada), por isso é seguro mesmo com --dry-run.
++    _sa_log "STEP" "Atualizando índice de pacotes (metadados apenas)..."
++    case "$SA_PKG" in
++        apt)    apt-get update -qq >> "$SA_LOG_FILE" 2>&1 || _sa_log "WARN" "  Falha ao atualizar índice apt — resultados podem refletir cache desatualizado." ;;
++        dnf)    dnf makecache -q >> "$SA_LOG_FILE" 2>&1 || true ;;
++        yum)    yum makecache -q >> "$SA_LOG_FILE" 2>&1 || true ;;
++        zypper) zypper --non-interactive refresh >> "$SA_LOG_FILE" 2>&1 || true ;;
++    esac
++
+     if ! command -v curl >/dev/null 2>&1; then
+         _sa_log "WARN" "curl ausente — verificação de CVE online desabilitada."
+         return 0
+@@ -443,13 +480,13 @@
+         checked=$(( checked + 1 ))
+         _sa_progress "$checked" "$total" "OSV.dev"
+ 
+-        # Verifica se está instalado
++        # Verifica se está instalado (comparação exata)
+         local installed_line
+-        installed_line=$(grep "^${cp}\t" "${SA_TMP_DIR}/installed.txt" 2>/dev/null | head -1) || true
++        installed_line=$(_sa_installed_line "$cp") || true
+         [ -z "$installed_line" ] && continue
+ 
+         local pkg_version
+-        pkg_version=$(echo "$installed_line" | awk '{print $2}')
++        pkg_version=$(echo "$installed_line" | awk -F'\t' '{print $2}')
+ 
+         local payload response
+         payload="{\"version\":\"${pkg_version}\",\"package\":{\"name\":\"${cp}\",\"ecosystem\":\"${ecosystem}\"}}"
+@@ -526,7 +563,7 @@
+             # https://ubuntu.com/security/cves?package=PKG&limit=5
+             local key_pkgs=("openssl" "openssh-server" "bash" "sudo" "curl" "nginx" "apache2" "python3" "git" "systemd")
+             for pkg in "${key_pkgs[@]}"; do
+-                grep -q "^${pkg}\t" "${SA_TMP_DIR}/installed.txt" 2>/dev/null || continue
++                _sa_is_installed "$pkg" || continue
+ 
+                 local usn_data
+                 usn_data=$(_sa_curl '{"notices":[]}' \
+@@ -534,7 +571,7 @@
+ 
+                 if command -v jq >/dev/null 2>&1 && echo "$usn_data" | jq -e '.cves | length > 0' >/dev/null 2>&1; then
+                     local installed_version
+-                    installed_version=$(grep "^${pkg}\t" "${SA_TMP_DIR}/installed.txt" | awk '{print $2}' | head -1)
++                    installed_version=$(_sa_installed_version "$pkg")
+ 
+                     local cve_count
+                     cve_count=$(echo "$usn_data" | jq '.cves | length' 2>/dev/null || echo 0)
+@@ -545,8 +582,8 @@
+                         severity=$(echo "$usn_data" | jq -r ".cves[$i].ubuntu_description // \"N/A\"" 2>/dev/null | head -c 80)
+                         description="Ubuntu Security Notice"
+ 
+-                        # Verifica se CVE já está nos resultados (deduplication prévia)
+-                        grep -q "^${pkg}|${cve_id}|" "$outfile" 2>/dev/null && continue
++                        # Verifica se CVE já está nos resultados (deduplicação prévia, comparação exata)
++                        awk -F'|' -v p="$pkg" -v c="$cve_id" '$1==p && $2==c{found=1} END{exit !found}' "$outfile" 2>/dev/null && continue
+ 
+                         echo "${pkg}|${cve_id}|USN|MEDIUM|5.0|${installed_version}|latest|ubuntu_usn" >> "$outfile"
+                         count=$(( count + 1 ))
+@@ -560,7 +597,7 @@
+             # https://security-tracker.debian.org/tracker/data/json — arquivo grande, usa por pacote
+             local key_pkgs=("openssl" "openssh" "bash" "sudo" "curl" "nginx" "apache2" "python3" "git" "systemd")
+             for pkg in "${key_pkgs[@]}"; do
+-                grep -q "^${pkg}\t" "${SA_TMP_DIR}/installed.txt" 2>/dev/null || continue
++                _sa_is_installed "$pkg" || continue
+ 
+                 local dsa_data
+                 dsa_data=$(_sa_curl '{}' \
+@@ -568,10 +605,10 @@
+ 
+                 if command -v jq >/dev/null 2>&1 && echo "$dsa_data" | jq -e 'keys | length > 0' >/dev/null 2>&1; then
+                     local installed_version
+-                    installed_version=$(grep "^${pkg}\t" "${SA_TMP_DIR}/installed.txt" | awk '{print $2}' | head -1)
++                    installed_version=$(_sa_installed_version "$pkg")
+ 
+                     while IFS= read -r cve_id; do
+-                        grep -q "^${pkg}|${cve_id}|" "$outfile" 2>/dev/null && continue
++                        awk -F'|' -v p="$pkg" -v c="$cve_id" '$1==p && $2==c{found=1} END{exit !found}' "$outfile" 2>/dev/null && continue
+                         local urgency
+                         urgency=$(echo "$dsa_data" | jq -r ".\"${cve_id}\".urgency // \"low\"" 2>/dev/null | head -1)
+                         local sev="MEDIUM"
+@@ -892,6 +929,11 @@
+     local pkg_mgr="$1"
+     _sa_log "STEP" "Gerando relatório Markdown em ${SA_REPORT_FILE}..."
+ 
++    # MELHORIA: cria o relatório já com 600 antes do 1º >>, evitando uma
++    # janela (ainda que curta) em que o arquivo herdaria umask padrão (644)
++    : > "$SA_REPORT_FILE"
++    chmod 600 "$SA_REPORT_FILE" 2>/dev/null || true
++
+     local hostname os_info kernel report_ts
+     hostname=$(hostname 2>/dev/null || echo "unknown")
+     os_info=$(grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "Linux")
+@@ -1185,10 +1227,38 @@
+ # ORQUESTRADOR PRINCIPAL — exposto ao sistema_manager como sa_run_audit
+ # ================================================================
+ 
++SA_LOCK_FILE="/var/lock/security_audit.lock"
++SA_LOCK_FD=200
++
++# MELHORIA: evita que uma execução via cron (--security-fix semanal) e uma
++# execução manual simultânea (ex.: alguém no menu interativo) disputem o
++# gerenciador de pacotes ao mesmo tempo — apt/dpkg não tolera duas instâncias
++# concorrentes e o resultado pode ser um dpkg lock travado ou pior, um
++# pacote instalado pela metade.
++_sa_acquire_lock() {
++    mkdir -p "$(dirname "$SA_LOCK_FILE")" 2>/dev/null || true
++    eval "exec ${SA_LOCK_FD}>\"$SA_LOCK_FILE\"" 2>/dev/null || return 0
++    if ! flock -n "$SA_LOCK_FD"; then
++        _sa_log "ERROR" "Já existe uma auditoria de segurança em execução (lock: ${SA_LOCK_FILE}). Abortando para evitar concorrência no gerenciador de pacotes."
++        return 1
++    fi
++    return 0
++}
++
++_sa_release_lock() {
++    flock -u "$SA_LOCK_FD" 2>/dev/null || true
++    eval "exec ${SA_LOCK_FD}>&-" 2>/dev/null || true
++}
++
+ sa_run_audit() {
+     local dry_run="${1:-false}"
+     local apply_fixes="${2:-false}"
+ 
++    if command -v flock >/dev/null 2>&1; then
++        _sa_acquire_lock || return 1
++        trap '_sa_release_lock; _sa_cleanup' EXIT
++    fi
++
+     # Sincroniza SA_PKG do pai (PKG já foi definido por detect_package_manager)
+     SA_PKG="${PKG:-unknown}"
+     SA_DRY_RUN="$dry_run"
